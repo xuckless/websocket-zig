@@ -14,6 +14,16 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_mod_tests.step);
 
+    // zlib.h for the Autobahn echo binaries' permessage-deflate (Zig 0.17
+    // has no @cImport).
+    const zlib_h = b.addWriteFiles().add("zlib_c.h", "#include <zlib.h>\n");
+    const zlib_c = b.addTranslateC(.{
+        .root_source_file = zlib_h,
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }).createModule();
+
     const echo_server = b.addExecutable(.{
         .name = "echo-server",
         .root_module = b.createModule(.{
@@ -23,6 +33,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
             .imports = &.{
                 .{ .name = "websocket", .module = mod },
+                .{ .name = "zlib_c", .module = zlib_c },
             },
         }),
     });
@@ -31,9 +42,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(echo_server);
 
     const echo_run = b.addRunArtifact(echo_server);
-    if (b.args) |args| {
-        echo_run.addArgs(args);
-    }
+    echo_run.addPassthruArgs();
 
     const echo_step = b.step("echo-server", "Run the Autobahn echo server");
     echo_step.dependOn(&echo_run.step);
@@ -47,6 +56,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
             .imports = &.{
                 .{ .name = "websocket", .module = mod },
+                .{ .name = "zlib_c", .module = zlib_c },
             },
         }),
     });
@@ -97,12 +107,14 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(blocking_client);
     examples_step.dependOn(&blocking_client.step);
 
-    const run_autobahn = b.path("scripts/run-autobahn.nu").getPath(b);
+    const run_autobahn = b.path("scripts/run-autobahn.nu");
 
-    const conformance_script = b.addSystemCommand(&.{
-        "nu",
-        run_autobahn,
-        b.getInstallPath(.bin, "echo-server"),
+    const conformance_script = b.addSystemCommand(&.{"nu"});
+
+    conformance_script.addFileArg(run_autobahn);
+
+    conformance_script.addArtifactArg(echo_server);
+    conformance_script.addArgs(&.{
         "9002",
         "echo-server",
         "fast",
@@ -112,10 +124,12 @@ pub fn build(b: *std.Build) void {
     const conformance_step = b.step("conformance", "Run the fast Autobahn conformance suite");
     conformance_step.dependOn(&conformance_script.step);
 
-    const conformance_full_script = b.addSystemCommand(&.{
-        "nu",
-        run_autobahn,
-        b.getInstallPath(.bin, "echo-server"),
+    const conformance_full_script = b.addSystemCommand(&.{"nu"});
+
+    conformance_full_script.addFileArg(run_autobahn);
+
+    conformance_full_script.addArtifactArg(echo_server);
+    conformance_full_script.addArgs(&.{
         "9002",
         "echo-server",
         "full",
@@ -128,12 +142,14 @@ pub fn build(b: *std.Build) void {
     );
     conformance_full_step.dependOn(&conformance_full_script.step);
 
-    const run_autobahn_client = b.path("scripts/run-autobahn-client.nu").getPath(b);
+    const run_autobahn_client = b.path("scripts/run-autobahn-client.nu");
 
-    const conformance_client_script = b.addSystemCommand(&.{
-        "nu",
-        run_autobahn_client,
-        b.getInstallPath(.bin, "echo-client"),
+    const conformance_client_script = b.addSystemCommand(&.{"nu"});
+
+    conformance_client_script.addFileArg(run_autobahn_client);
+
+    conformance_client_script.addArtifactArg(echo_client);
+    conformance_client_script.addArgs(&.{
         "9001",
         "echo-client",
         "fast",
@@ -146,10 +162,12 @@ pub fn build(b: *std.Build) void {
     );
     conformance_client_step.dependOn(&conformance_client_script.step);
 
-    const conformance_client_full_script = b.addSystemCommand(&.{
-        "nu",
-        run_autobahn_client,
-        b.getInstallPath(.bin, "echo-client"),
+    const conformance_client_full_script = b.addSystemCommand(&.{"nu"});
+
+    conformance_client_full_script.addFileArg(run_autobahn_client);
+
+    conformance_client_full_script.addArtifactArg(echo_client);
+    conformance_client_full_script.addArgs(&.{
         "9001",
         "echo-client",
         "full",
@@ -161,37 +179,6 @@ pub fn build(b: *std.Build) void {
         "Run the full Autobahn client conformance test suite",
     );
     conformance_client_full_step.dependOn(&conformance_client_full_script.step);
-
-    if (b.lazyDependency("libxev", .{})) |xev_dep| {
-        const xev_echo = b.addExecutable(.{
-            .name = "xev-echo",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("examples/xev-echo.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "websocket", .module = mod },
-                    .{ .name = "xev", .module = xev_dep.module("xev") },
-                },
-            }),
-        });
-        const xev_install = b.addInstallArtifact(xev_echo, .{});
-        examples_step.dependOn(&xev_install.step);
-
-        const xev_conformance = b.addSystemCommand(&.{
-            "nu",
-            run_autobahn,
-            b.getInstallPath(.bin, "xev-echo"),
-            "9003",
-            "xev-echo",
-            "fast",
-        });
-        xev_conformance.step.dependOn(&xev_install.step);
-
-        const xev_conf_step = b.step(
-            "conformance-xev",
-            "Run Autobahn against xev echo server",
-        );
-        xev_conf_step.dependOn(&xev_conformance.step);
-    }
+    // The libxev example (examples/xev-echo.zig) is not built: libxev has
+    // no Zig 0.17 port, and the library does not need it.
 }

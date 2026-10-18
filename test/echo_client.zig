@@ -16,7 +16,7 @@ const print = std.debug.print;
 const ws = @import("websocket").client;
 const DeflateConfig = ws.Extension.DeflateConfig;
 
-const c = @cImport(@cInclude("zlib.h"));
+const c = @import("zlib_c");
 
 pub fn main(init: std.process.Init.Minimal) !void {
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
@@ -301,12 +301,12 @@ const ZlibState = struct {
             .client_no_context_takeover = cfg.client_no_context_takeover,
         };
 
-        const inflate_wbits: c_int = @intFromEnum(cfg.server_max_window_bits);
+        const inflate_wbits: c_int = @backingInt(cfg.server_max_window_bits);
         if (c.inflateInit2(&self.inflate_stream, -inflate_wbits) != c.Z_OK)
             return error.ZlibInitFailed;
         errdefer _ = c.inflateEnd(&self.inflate_stream);
 
-        const deflate_wbits: c_int = @intFromEnum(cfg.client_max_window_bits);
+        const deflate_wbits: c_int = @backingInt(cfg.client_max_window_bits);
         if (c.deflateInit2(
             &self.deflate_stream,
             c.Z_DEFAULT_COMPRESSION,

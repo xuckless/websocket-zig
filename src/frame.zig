@@ -123,7 +123,7 @@ pub const Opcode = enum(u4) {
 
     /// Returns true for opcodes 0x8–0xF (control frames: close, ping, pong, and reserved).
     pub fn isControl(self: Opcode) bool {
-        return @intFromEnum(self) >= 0x8;
+        return @backingInt(self) >= 0x8;
     }
 
     /// Returns true for opcodes not defined by RFC 6455 (i.e. not
@@ -184,7 +184,7 @@ pub const FrameHeader = struct {
 
             // Byte 0: FIN(1) | RSV(3) | Opcode(4)
             const rsv_bits: u8 = @as(u3, @bitCast(header.rsv));
-            var byte0: u8 = @intFromEnum(header.opcode) | (rsv_bits << 4);
+            var byte0: u8 = @backingInt(header.opcode) | (rsv_bits << 4);
             if (header.fin) byte0 |= 0x80;
             b.appendAssumeCapacity(byte0);
 
@@ -285,7 +285,9 @@ pub const Mask = struct {
         // Rotate mask to align with offset, then tile to fill the vector.
         var rotated: MaskKey = undefined;
         for (0..4) |k| rotated[k] = self.key[(k + self.offset) % 4];
-        const mask_vec: ChunkVec = rotated ** (vec_len / 4);
+        var tiled: Chunk = undefined;
+        for (0..vec_len) |k| tiled[k] = rotated[k % 4];
+        const mask_vec: ChunkVec = tiled;
 
         var i: usize = 0;
         while (payload.len - i >= vec_len) : (i += vec_len) {
@@ -442,8 +444,8 @@ test "Opcode.isControl" {
 test "Opcode.isReserved" {
     try testing.expect(!Opcode.text.isReserved());
     try testing.expect(!Opcode.close.isReserved());
-    try testing.expect((@as(Opcode, @enumFromInt(0x3))).isReserved());
-    try testing.expect((@as(Opcode, @enumFromInt(0xF))).isReserved());
+    try testing.expect((@as(Opcode, @fromBackingInt(@intCast(0x3)))).isReserved());
+    try testing.expect((@as(Opcode, @fromBackingInt(@intCast(0xF)))).isReserved());
 }
 
 test "FrameHeader.encodedLen" {
