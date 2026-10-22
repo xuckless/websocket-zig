@@ -351,6 +351,11 @@ fn FrameHandler(comptime is_server: bool) type {
                 switch (result.event) {
                     .frame_header => |hdr| {
                         try self.validator.check(hdr);
+                        // RSV1 (permessage-deflate, RFC 7692 §6) marks a
+                        // message's first frame only: never a continuation
+                        // or a control frame.
+                        if (hdr.rsv.rsv1 and (hdr.opcode == .continuation or hdr.opcode.isControl()))
+                            return error.ReservedRsvBit;
                         self.cur_opcode = hdr.opcode;
                         self.cur_fin = hdr.fin;
                         if (hdr.opcode == .text or hdr.opcode == .binary) {
@@ -1259,4 +1264,36 @@ test "FrameHandler: need_more on partial input" {
     var buf = [_]u8{0x81};
     const result = try h.feed(&buf);
     try testing.expectEqual(.need_more, result.message);
+}
+
+test "FrameHandler: RSV1 on a control frame or a continuation is refused" {
+    const opts: Options = .{ .extension = .{ .permessage_deflate = .init } };
+    {
+        var h: ServerFrameHandler = .init(opts);
+        var buf = [_]u8{ 0xC9, 0x80, 0, 0, 0, 0 };
+        try testing.expectError(error.ReservedRsvBit, h.feed(&buf));
+    }
+    {
+        var h: ServerFrameHandler = .init(opts);
+        var buf = [_]u8{ 0x41, 0x81, 0, 0, 0, 0, 'a', 0xC0, 0x81, 0, 0, 0, 0, 'b' };
+        var rest: []u8 = &buf;
+        const first = try h.feed(rest);
+        rest = rest[first.consumed..];
+        try testing.expect(first.message == .data);
+        while (true) {
+            const r = h.feed(rest) catch |err| {
+                try testing.expectEqual(error.ReservedRsvBit, err);
+                break;
+            };
+            rest = rest[r.consumed..];
+            try testing.expect(r.message != .need_more);
+        }
+    }
+    {
+        // RSV1 on the first frame is a compressed message.
+        var h: ServerFrameHandler = .init(opts);
+        var buf = [_]u8{ 0xC1, 0x81, 0, 0, 0, 0, 'a' };
+        const r = try h.feed(&buf);
+        try testing.expect(r.message == .data);
+    }
 }
